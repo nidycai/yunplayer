@@ -46,7 +46,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier.modifier
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
@@ -116,7 +116,12 @@ fun PlayerScreen(
                 .weight(1f),
             contentAlignment = Alignment.Center,
         ) {
-            AnimatedVisibility(visible = !showLyrics, enter = fadeIn(), exit = fadeOut()) {
+            // 使用顶层 AnimatedVisibility（非 ColumnScope 扩展）
+            androidx.compose.animation.AnimatedVisibility(
+                visible = !showLyrics,
+                enter = fadeIn(),
+                exit = fadeOut(),
+            ) {
                 Box(
                     Modifier
                         .fillMaxWidth(0.88f)
@@ -181,7 +186,11 @@ fun PlayerScreen(
                     }
                 }
             }
-            AnimatedVisibility(visible = showLyrics, enter = fadeIn(), exit = fadeOut()) {
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showLyrics,
+                enter = fadeIn(),
+                exit = fadeOut(),
+            ) {
                 Box(
                     Modifier
                         .fillMaxSize()
