@@ -23,9 +23,8 @@ import androidx.compose.ui.Modifier.modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.yunplayer.app.ui.player.PlayerScreen
 import com.yunplayer.app.ui.library.LibrarySheets
-import com.yunplayer.app.ui.settings.SettingsSheets
+import com.yunplayer.app.ui.player.PlayerScreen
 import com.yunplayer.app.ui.theme.colorsFor
 import kotlinx.coroutines.delay
 

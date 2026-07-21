@@ -29,12 +29,12 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.RepeatOne
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.QueueMusic
-import androidx.compose.material.icons.outlined.Repeat
-import androidx.compose.material.icons.outlined.RepeatOne
-import androidx.compose.material.icons.outlined.Shuffle
-import androidx.compose.material.icons.outlined.SwapVert
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Slider
@@ -311,10 +311,10 @@ fun PlayerScreen(
             }
             IconButton(onClick = onCycleMode) {
                 val icon = when (prefs.playMode) {
-                    PlayMode.ORDER -> Icons.Outlined.SwapVert
-                    PlayMode.LOOP -> Icons.Outlined.Repeat
-                    PlayMode.SHUFFLE -> Icons.Outlined.Shuffle
-                    PlayMode.ONE -> Icons.Outlined.RepeatOne
+                    PlayMode.ORDER -> Icons.Filled.List
+                    PlayMode.LOOP -> Icons.Filled.Repeat
+                    PlayMode.SHUFFLE -> Icons.Filled.Shuffle
+                    PlayMode.ONE -> Icons.Filled.RepeatOne
                 }
                 Icon(
                     icon,

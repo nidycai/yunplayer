@@ -1,5 +1,6 @@
 package com.yunplayer.app.ui.components
 
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -18,7 +19,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import com.yunplayer.app.data.model.PlayFxId
-import kotlin.math.max
 
 /** 封面播放动效：涟漪 / 呼吸 / 脉冲 / 光晕 / 关闭 */
 @Composable
@@ -30,46 +30,28 @@ fun CoverFxOverlay(
 ) {
     if (!playing || fx == PlayFxId.NONE) return
     val shape = RoundedCornerShape(36.dp)
-    val t = rememberInfiniteTransition(label = "coverFx")
+    val transition = rememberInfiniteTransition(label = "coverFx")
 
     when (fx) {
-        PlayFxId.RIPPLE, PlayFxId.PULSE -> {
-            val period = if (fx == PlayFxId.RIPPLE) 7200 else 2800
-            repeat(3) { i ->
-                val p by t.animateFloat(
-                    initialValue = 0f,
-                    targetValue = 1f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(period, easing = LinearEasing),
-                        repeatMode = RepeatMode.Restart,
-                        initialStartOffset = androidx.compose.animation.core.StartOffset(-(period / 3) * i),
-                    ),
-                    label = "ring$i",
-                )
-                val scale = 1f + p * (if (fx == PlayFxId.RIPPLE) 0.62f else 0.48f)
-                val alpha = (1f - p) * (if (fx == PlayFxId.RIPPLE) 0.5f else 0.55f)
-                Box(
-                    modifier
-                        .fillMaxSize()
-                        .scale(scale)
-                        .graphicsLayer { this.alpha = max(0f, alpha) }
-                        .border(
-                            width = (2.2f - i * 0.4f).dp,
-                            color = greenDeep.copy(alpha = 0.55f - i * 0.1f),
-                            shape = shape,
-                        ),
-                )
-            }
-        }
+        PlayFxId.RIPPLE -> RippleRings(transition, greenDeep, shape, modifier, slow = true)
+        PlayFxId.PULSE -> RippleRings(transition, greenDeep, shape, modifier, slow = false)
         PlayFxId.BREATH -> {
-            val p by t.animateFloat(
-                0.92f, 1.18f,
-                infiniteRepeatable(tween(4200), RepeatMode.Reverse),
+            val p by transition.animateFloat(
+                initialValue = 0.92f,
+                targetValue = 1.18f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(4200, easing = FastOutSlowInEasing),
+                    repeatMode = RepeatMode.Reverse,
+                ),
                 label = "breath",
             )
-            val a by t.animateFloat(
-                0.22f, 0.55f,
-                infiniteRepeatable(tween(4200), RepeatMode.Reverse),
+            val a by transition.animateFloat(
+                initialValue = 0.22f,
+                targetValue = 0.55f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(4200, easing = FastOutSlowInEasing),
+                    repeatMode = RepeatMode.Reverse,
+                ),
                 label = "breathA",
             )
             Box(
@@ -77,20 +59,17 @@ fun CoverFxOverlay(
                     .fillMaxSize()
                     .scale(p)
                     .graphicsLayer { alpha = a }
-                    .border(0.dp, Color.Transparent, shape)
-                    .then(
-                        Modifier.border(
-                            24.dp,
-                            greenDeep.copy(alpha = 0.15f),
-                            shape,
-                        ),
-                    ),
+                    .border(20.dp, greenDeep.copy(alpha = 0.18f), shape),
             )
         }
         PlayFxId.GLOW -> {
-            val rot by t.animateFloat(
-                0f, 360f,
-                infiniteRepeatable(tween(10000, easing = LinearEasing)),
+            val rot by transition.animateFloat(
+                initialValue = 0f,
+                targetValue = 360f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(10000, easing = LinearEasing),
+                    repeatMode = RepeatMode.Restart,
+                ),
                 label = "glow",
             )
             Box(
@@ -104,6 +83,44 @@ fun CoverFxOverlay(
                     .border(28.dp, greenDeep.copy(alpha = 0.25f), shape),
             )
         }
-        else -> Unit
+        PlayFxId.NONE -> Unit
+    }
+}
+
+@Composable
+private fun RippleRings(
+    transition: androidx.compose.animation.core.InfiniteTransition,
+    greenDeep: Color,
+    shape: RoundedCornerShape,
+    modifier: Modifier,
+    slow: Boolean,
+) {
+    val period = if (slow) 7200 else 2800
+    val amp = if (slow) 0.62f else 0.48f
+    // 三圈共用同一动画相位，用固定相位偏移近似错开
+    val p by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = period, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "ripple",
+    )
+    listOf(0f, 0.33f, 0.66f).forEachIndexed { i, phase ->
+        val local = (p + phase) % 1f
+        val scale = 1f + local * amp
+        val alpha = (1f - local) * if (slow) 0.5f else 0.55f
+        Box(
+            modifier
+                .fillMaxSize()
+                .scale(scale)
+                .graphicsLayer { this.alpha = alpha.coerceIn(0f, 1f) }
+                .border(
+                    width = (2.2f - i * 0.4f).dp,
+                    color = greenDeep.copy(alpha = (0.55f - i * 0.1f).coerceIn(0.1f, 1f)),
+                    shape = shape,
+                ),
+        )
     }
 }

@@ -97,7 +97,7 @@ fun LibrarySheets(
     onCreatePlaylist: (String) -> Unit,
     onDeletePlaylist: (String) -> Unit,
     onAddCurrent: (String) -> Unit,
-    onRemoveTrack: (String) -> Unit,
+    onRemoveTrack: (String) -> Unit, // reserved for swipe-to-delete later
     onClearLocal: () -> Unit,
     onClearWebDavLib: () -> Unit,
     onPickLocal: () -> Unit,

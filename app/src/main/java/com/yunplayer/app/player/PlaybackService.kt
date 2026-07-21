@@ -1,3 +1,5 @@
+@file:OptIn(androidx.media3.common.util.UnstableApi::class)
+
 package com.yunplayer.app.player
 
 import android.app.PendingIntent
@@ -7,7 +9,6 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
-import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -30,7 +31,6 @@ import kotlinx.coroutines.launch
  * 原生播放服务（Media3）—— 无 WebView / 无 CORS。
  * WebDAV 通过 OkHttp DataSource + AuthInterceptor 拉流。
  */
-@UnstableApi
 class PlaybackService : MediaSessionService() {
     private var player: ExoPlayer? = null
     private var session: MediaSession? = null
