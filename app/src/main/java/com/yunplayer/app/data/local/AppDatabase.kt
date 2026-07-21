@@ -61,6 +61,9 @@ interface PlaylistDao {
     @Query("SELECT trackId FROM playlist_tracks WHERE playlistId = :playlistId ORDER BY sortOrder, trackId")
     fun observeTrackIds(playlistId: String): Flow<List<String>>
 
+    @Query("SELECT * FROM playlist_tracks ORDER BY playlistId, sortOrder, trackId")
+    fun observeAllCrossRefs(): Flow<List<PlaylistTrackCrossRef>>
+
     @Query("SELECT trackId FROM playlist_tracks WHERE playlistId = :playlistId ORDER BY sortOrder, trackId")
     suspend fun getTrackIds(playlistId: String): List<String>
 

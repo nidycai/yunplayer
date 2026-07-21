@@ -40,19 +40,27 @@ class MusicRepository(
         db.tracks().observeBySource(TrackSource.WEBDAV.name).map { list -> list.map { it.toTrack() } }
     val userPrefs: Flow<UserPrefs> = prefs.prefs
 
+    /** 歌单列表（系统 local/webdav 与曲库同步；其余用交叉表） */
     val playlists: Flow<List<Playlist>> = combine(
         db.playlists().observeAll(),
         db.tracks().observeAll(),
-    ) { pls, tracks ->
+        db.playlists().observeAllCrossRefs(),
+    ) { pls, tracks, refs ->
+        val refsByPl = refs.groupBy { it.playlistId }
+        val localIds = tracks.filter { it.source == TrackSource.LOCAL.name }.map { it.id }
+        val webdavIds = tracks.filter { it.source == TrackSource.WEBDAV.name }.map { it.id }
         pls.map { pl ->
-            val ids = db.playlists().getTrackIds(pl.id)
-            val cover = ids.firstOrNull()?.let { tid -> tracks.find { it.id == tid }?.coverUri }
+            val ids = when (pl.id) {
+                "local" -> localIds
+                "webdav" -> webdavIds
+                else -> refsByPl[pl.id]?.sortedBy { it.sortOrder }?.map { it.trackId }.orEmpty()
+            }
             Playlist(
                 id = pl.id,
                 name = pl.name,
                 isSystem = pl.isSystem,
                 trackIds = ids,
-                coverUri = cover,
+                coverUri = ids.firstOrNull()?.let { tid -> tracks.find { it.id == tid }?.coverUri },
             )
         }
     }
