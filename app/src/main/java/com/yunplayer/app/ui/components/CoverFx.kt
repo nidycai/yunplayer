@@ -14,9 +14,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import com.yunplayer.app.data.model.PlayFxId
 
@@ -58,7 +59,7 @@ fun CoverFxOverlay(
                 modifier
                     .fillMaxSize()
                     .scale(p)
-                    .graphicsLayer { alpha = a }
+                    .alpha(a)
                     .border(20.dp, greenDeep.copy(alpha = 0.18f), shape),
             )
         }
@@ -76,10 +77,8 @@ fun CoverFxOverlay(
                 modifier
                     .fillMaxSize()
                     .scale(1.15f)
-                    .graphicsLayer {
-                        rotationZ = rot
-                        alpha = 0.4f
-                    }
+                    .rotate(rot)
+                    .alpha(0.4f)
                     .border(28.dp, greenDeep.copy(alpha = 0.25f), shape),
             )
         }
@@ -97,7 +96,6 @@ private fun RippleRings(
 ) {
     val period = if (slow) 7200 else 2800
     val amp = if (slow) 0.62f else 0.48f
-    // 三圈共用同一动画相位，用固定相位偏移近似错开
     val p by transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
@@ -110,12 +108,12 @@ private fun RippleRings(
     listOf(0f, 0.33f, 0.66f).forEachIndexed { i, phase ->
         val local = (p + phase) % 1f
         val scale = 1f + local * amp
-        val alpha = (1f - local) * if (slow) 0.5f else 0.55f
+        val alpha = ((1f - local) * if (slow) 0.5f else 0.55f).coerceIn(0f, 1f)
         Box(
             modifier
                 .fillMaxSize()
                 .scale(scale)
-                .graphicsLayer { this.alpha = alpha.coerceIn(0f, 1f) }
+                .alpha(alpha)
                 .border(
                     width = (2.2f - i * 0.4f).dp,
                     color = greenDeep.copy(alpha = (0.55f - i * 0.1f).coerceIn(0.1f, 1f)),

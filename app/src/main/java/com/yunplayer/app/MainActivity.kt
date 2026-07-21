@@ -10,6 +10,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.collectAsState
@@ -27,7 +28,7 @@ class MainActivity : ComponentActivity() {
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
-    ) { /* optional toast */ }
+    ) { }
 
     private val openAudioLauncher = registerForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments(),
@@ -47,13 +48,17 @@ class MainActivity : ComponentActivity() {
             val prefs by vm.prefs.collectAsState()
             val yun = colorsFor(prefs.theme)
             YunPlayerTheme(themeId = prefs.theme) {
-                Surface(Modifier = Modifier.fillMaxSize(), color = yun.bgBot) {
-                    YunAppRoot(
-                        vm = vm,
-                        onPickLocalAudio = {
-                            openAudioLauncher.launch(arrayOf("audio/*", "application/ogg"))
-                        },
-                    )
+                // positional use only; no named "modifier =" argument
+                val full = Modifier.fillMaxSize()
+                Box(full) {
+                    Surface(color = yun.bgBot) {
+                        YunAppRoot(
+                            vm = vm,
+                            onPickLocalAudio = {
+                                openAudioLauncher.launch(arrayOf("audio/*", "application/ogg"))
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -64,15 +69,23 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= 33) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_AUDIO)
                 != PackageManager.PERMISSION_GRANTED
-            ) need += Manifest.permission.READ_MEDIA_AUDIO
+            ) {
+                need += Manifest.permission.READ_MEDIA_AUDIO
+            }
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED
-            ) need += Manifest.permission.POST_NOTIFICATIONS
+            ) {
+                need += Manifest.permission.POST_NOTIFICATIONS
+            }
         } else {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
                 != PackageManager.PERMISSION_GRANTED
-            ) need += Manifest.permission.READ_EXTERNAL_STORAGE
+            ) {
+                need += Manifest.permission.READ_EXTERNAL_STORAGE
+            }
         }
-        if (need.isNotEmpty()) permissionLauncher.launch(need.toTypedArray())
+        if (need.isNotEmpty()) {
+            permissionLauncher.launch(need.toTypedArray())
+        }
     }
 }
