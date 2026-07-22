@@ -107,7 +107,16 @@ class YunViewModel(app: Application) : AndroidViewModel(app) {
                 android.util.Log.e("YunVM", "prefs collect", e)
             }
         }
-        // 轮询播放进度（Media3 player），所有 player 访问必须 try-catch
+        // 播放错误 → toast 一次，然后清掉，避免重复弹
+        viewModelScope.launch {
+            playback.lastError.collect { err ->
+                if (!err.isNullOrBlank()) {
+                    toast(err)
+                    playback.clearError()
+                }
+            }
+        }
+        // 轮询播放进度；player 丢失时要把 playing 置 false，避免 UI 假“播放中”
         viewModelScope.launch {
             while (true) {
                 kotlinx.coroutines.delay(250)
@@ -118,12 +127,24 @@ class YunViewModel(app: Application) : AndroidViewModel(app) {
                         val pos = p.currentPosition.coerceAtLeast(0)
                         val durRaw = p.duration
                         val dur = if (durRaw > 0 && durRaw < Long.MAX_VALUE / 4) durRaw else 0L
+                        // ERROR / 缓冲失败时 isPlaying=false，同时带上 error 标记
                         val playing = p.isPlaying
-                        PlayerSnap(id, idx, pos, dur, playing)
-                    } ?: continue
+                        val err = p.playerError != null
+                        PlayerSnap(id, idx, pos, dur, playing, err)
+                    }
 
+                    if (snap == null) {
+                        // 服务挂了：UI 显示暂停，不 clear 曲目信息（用户仍能点播放恢复）
+                        if (_player.value.playing) {
+                            _player.update { it.copy(playing = false) }
+                        }
+                        continue
+                    }
+
+                    val queue = _player.value.queue.ifEmpty { playback.lastQueueSnapshot() }
                     val track = allTracks.value.find { it.id == snap.id }
-                        ?: _player.value.queue.getOrNull(snap.idx)
+                        ?: queue.getOrNull(snap.idx)
+                        ?: _player.value.track
 
                     val liked = if (track == null) {
                         false
@@ -143,11 +164,12 @@ class YunViewModel(app: Application) : AndroidViewModel(app) {
                     _player.update {
                         it.copy(
                             track = track,
-                            playing = snap.playing,
+                            playing = snap.playing && !snap.hasError,
                             positionMs = snap.pos,
                             durationMs = if (snap.dur > 0) snap.dur else (track?.durationMs ?: 0),
                             liked = liked,
                             queueIndex = snap.idx,
+                            queue = if (it.queue.isEmpty() && queue.isNotEmpty()) queue else it.queue,
                         )
                     }
                 } catch (e: Exception) {
@@ -163,6 +185,7 @@ class YunViewModel(app: Application) : AndroidViewModel(app) {
         val pos: Long,
         val dur: Long,
         val playing: Boolean,
+        val hasError: Boolean = false,
     )
 
     fun toast(msg: String) {
