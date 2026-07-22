@@ -45,6 +45,8 @@ fun YunAppRoot(
     val webdav by vm.webdav.collectAsState()
     val detailId by vm.detailPlaylistId.collectAsState()
     val detailTracks by vm.detailTracks.collectAsState()
+    val allTracks by vm.allTracks.collectAsState()
+    val addingToPlaylistId by vm.addingToPlaylistId.collectAsState()
     val toast by vm.toast.collectAsState()
     val yun = colorsFor(prefs.theme)
 
@@ -143,6 +145,15 @@ fun YunAppRoot(
             prefs = prefs,
             onTheme = vm::setTheme,
             onPlayFx = vm::setPlayFx,
+            allTracks = allTracks,
+            addingToPlaylistId = addingToPlaylistId,
+            onOpenAddTracks = { id ->
+                sheet = SheetKind.PlaylistDetail
+                vm.openPlaylist(id)
+                vm.openAddTracks(id)
+            },
+            onCloseAddTracks = vm::closeAddTracks,
+            onConfirmAddTracks = { ids -> vm.addTracksToCurrentPlaylist(ids) },
         )
 
         // Toast

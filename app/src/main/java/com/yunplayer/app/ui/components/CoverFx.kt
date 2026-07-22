@@ -21,7 +21,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.yunplayer.app.data.model.PlayFxId
 
-/** 封面播放动效：涟漪 / 呼吸 / 脉冲 / 光晕 / 关闭 */
+/**
+ * 封面播放动效：涟漪 / 呼吸 / 脉冲 / 光晕 / 关闭。
+ * 缩放一律从 1.0 向外扩，避免与封面之间出现空隙。
+ */
 @Composable
 fun CoverFxOverlay(
     playing: Boolean,
@@ -37,9 +40,10 @@ fun CoverFxOverlay(
         PlayFxId.RIPPLE -> RippleRings(transition, greenDeep, shape, modifier, slow = true)
         PlayFxId.PULSE -> RippleRings(transition, greenDeep, shape, modifier, slow = false)
         PlayFxId.BREATH -> {
+            // 从 1.0 扩到 1.14，贴着封面外缘呼吸
             val p by transition.animateFloat(
-                initialValue = 0.92f,
-                targetValue = 1.18f,
+                initialValue = 1.0f,
+                targetValue = 1.14f,
                 animationSpec = infiniteRepeatable(
                     animation = tween(4200, easing = FastOutSlowInEasing),
                     repeatMode = RepeatMode.Reverse,
@@ -47,8 +51,8 @@ fun CoverFxOverlay(
                 label = "breath",
             )
             val a by transition.animateFloat(
-                initialValue = 0.22f,
-                targetValue = 0.55f,
+                initialValue = 0.18f,
+                targetValue = 0.48f,
                 animationSpec = infiniteRepeatable(
                     animation = tween(4200, easing = FastOutSlowInEasing),
                     repeatMode = RepeatMode.Reverse,
@@ -60,7 +64,7 @@ fun CoverFxOverlay(
                     .fillMaxSize()
                     .scale(p)
                     .alpha(a)
-                    .border(20.dp, greenDeep.copy(alpha = 0.18f), shape),
+                    .border(3.dp, greenDeep.copy(alpha = 0.35f), shape),
             )
         }
         PlayFxId.GLOW -> {
@@ -76,10 +80,10 @@ fun CoverFxOverlay(
             Box(
                 modifier
                     .fillMaxSize()
-                    .scale(1.15f)
+                    .scale(1.06f)
                     .rotate(rot)
-                    .alpha(0.4f)
-                    .border(28.dp, greenDeep.copy(alpha = 0.25f), shape),
+                    .alpha(0.35f)
+                    .border(6.dp, greenDeep.copy(alpha = 0.28f), shape),
             )
         }
         PlayFxId.NONE -> Unit
@@ -95,7 +99,8 @@ private fun RippleRings(
     slow: Boolean,
 ) {
     val period = if (slow) 7200 else 2800
-    val amp = if (slow) 0.62f else 0.48f
+    // 最大扩张幅度；从 1.0 起，与封面贴边
+    val amp = if (slow) 0.28f else 0.22f
     val p by transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
@@ -108,15 +113,15 @@ private fun RippleRings(
     listOf(0f, 0.33f, 0.66f).forEachIndexed { i, phase ->
         val local = (p + phase) % 1f
         val scale = 1f + local * amp
-        val alpha = ((1f - local) * if (slow) 0.5f else 0.55f).coerceIn(0f, 1f)
+        val alpha = ((1f - local) * if (slow) 0.55f else 0.6f).coerceIn(0f, 1f)
         Box(
             modifier
                 .fillMaxSize()
                 .scale(scale)
                 .alpha(alpha)
                 .border(
-                    width = (2.2f - i * 0.4f).dp,
-                    color = greenDeep.copy(alpha = (0.55f - i * 0.1f).coerceIn(0.1f, 1f)),
+                    width = (2.4f - i * 0.35f).dp,
+                    color = greenDeep.copy(alpha = (0.5f - i * 0.1f).coerceIn(0.12f, 1f)),
                     shape = shape,
                 ),
         )

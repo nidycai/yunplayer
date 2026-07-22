@@ -113,6 +113,11 @@ fun LibrarySheets(
     onPlayWebDavEntry: (WebDavEntry) -> Unit,
     onTheme: (AppThemeId) -> Unit,
     onPlayFx: (PlayFxId) -> Unit,
+    allTracks: List<Track> = emptyList(),
+    addingToPlaylistId: String? = null,
+    onOpenAddTracks: (String) -> Unit = {},
+    onCloseAddTracks: () -> Unit = {},
+    onConfirmAddTracks: (List<String>) -> Unit = {},
 ) {
     // 左上角歌单扇出
     AnimatedVisibility(
@@ -276,12 +281,31 @@ fun LibrarySheets(
                         onClick = { onPlayTracks(detailTracks, 0) },
                         colors = ButtonDefaults.buttonColors(containerColor = yun.green),
                         modifier = Modifier.weight(1f),
+                        enabled = detailTracks.isNotEmpty(),
                     ) { Text("播放全部") }
-                    OutlinedButton(onClick = { onAddCurrent(detailId) }, modifier = Modifier.weight(1f)) {
-                        Text("加入当前曲")
+                    OutlinedButton(
+                        onClick = { onOpenAddTracks(detailId) },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("添加歌曲")
                     }
                 }
+                Spacer(Modifier.height(6.dp))
+                OutlinedButton(
+                    onClick = { onAddCurrent(detailId) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("加入当前播放曲")
+                }
                 Spacer(Modifier.height(8.dp))
+                if (detailTracks.isEmpty()) {
+                    Text(
+                        "歌单还是空的，点「添加歌曲」从曲库挑选",
+                        color = yun.muted,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(vertical = 20.dp),
+                    )
+                }
                 LazyColumn {
                     itemsIndexed(detailTracks) { i, t ->
                         TrackRow(t, yun, player.track?.id == t.id) {
@@ -290,6 +314,24 @@ fun LibrarySheets(
                     }
                 }
             }
+            Spacer(Modifier.navigationBarsPadding().height(16.dp))
+        }
+    }
+
+    // 新建/添加歌曲到歌单
+    if (addingToPlaylistId != null) {
+        ModalBottomSheet(
+            onDismissRequest = onCloseAddTracks,
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = yun.card,
+            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        ) {
+            AddTracksSheet(
+                allTracks = allTracks,
+                yun = yun,
+                onConfirm = onConfirmAddTracks,
+                onCancel = onCloseAddTracks,
+            )
             Spacer(Modifier.navigationBarsPadding().height(16.dp))
         }
     }
@@ -418,7 +460,9 @@ private fun SourcesSheet(
     onOpenWebDav: () -> Unit,
     onRemoveTrack: (String) -> Unit,
 ) {
-    var tab by remember { mutableIntStateOf(0) }
+    var tab by remember { mutableIntStateOf(0) } // 0 local 1 webdav
+    var group by remember { mutableIntStateOf(0) } // 0 songs 1 artist 2 album
+    val list = if (tab == 0) local else webdav
     Column(Modifier.padding(horizontal = 16.dp)) {
         Text("歌曲源管理", color = yun.ink, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
         Spacer(Modifier.height(10.dp))
@@ -426,35 +470,178 @@ private fun SourcesSheet(
             TabChip("本地 ${local.size}", tab == 0, yun) { tab = 0 }
             TabChip("WebDAV ${webdav.size}", tab == 1, yun) { tab = 1 }
         }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TabChip("歌曲", group == 0, yun) { group = 0 }
+            TabChip("艺术家", group == 1, yun) { group = 1 }
+            TabChip("专辑", group == 2, yun) { group = 2 }
+        }
         Spacer(Modifier.height(10.dp))
         if (tab == 0) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onPickLocal, colors = ButtonDefaults.buttonColors(yun.green)) {
                     Text("导入本地")
                 }
-                OutlinedButton(onClick = { if (local.isNotEmpty()) onPlayTracks(local, 0) }) {
+                OutlinedButton(onClick = { if (list.isNotEmpty()) onPlayTracks(list, 0) }) {
                     Text("播放全部")
                 }
                 OutlinedButton(onClick = onClearLocal) { Text("清空") }
-            }
-            LazyColumn {
-                itemsIndexed(local) { i, t ->
-                    TrackRow(t, yun, false) { onPlayTracks(local, i) }
-                }
             }
         } else {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onOpenWebDav, colors = ButtonDefaults.buttonColors(yun.green)) {
                     Text("连接 / 浏览")
                 }
-                OutlinedButton(onClick = { if (webdav.isNotEmpty()) onPlayTracks(webdav, 0) }) {
+                OutlinedButton(onClick = { if (list.isNotEmpty()) onPlayTracks(list, 0) }) {
                     Text("播放全部")
                 }
                 OutlinedButton(onClick = onClearWebDav) { Text("清空") }
             }
-            LazyColumn {
-                itemsIndexed(webdav) { i, t ->
-                    TrackRow(t, yun, false) { onPlayTracks(webdav, i) }
+        }
+        Spacer(Modifier.height(6.dp))
+        when (group) {
+            0 -> LazyColumn {
+                itemsIndexed(list) { i, t ->
+                    TrackRow(t, yun, false) { onPlayTracks(list, i) }
+                }
+            }
+            1 -> {
+                val byArtist = remember(list) {
+                    list.groupBy { it.artist.ifBlank { "未知艺人" } }
+                        .toList()
+                        .sortedBy { it.first.lowercase() }
+                }
+                LazyColumn {
+                    items(byArtist) { (artist, tracks) ->
+                        GroupHeader(artist, tracks.size, yun) {
+                            onPlayTracks(tracks, 0)
+                        }
+                        tracks.forEachIndexed { i, t ->
+                            TrackRow(t, yun, false) { onPlayTracks(tracks, i) }
+                        }
+                    }
+                }
+            }
+            else -> {
+                val byAlbum = remember(list) {
+                    list.groupBy { it.album.ifBlank { "未知专辑" } }
+                        .toList()
+                        .sortedBy { it.first.lowercase() }
+                }
+                LazyColumn {
+                    items(byAlbum) { (album, tracks) ->
+                        GroupHeader(album, tracks.size, yun) {
+                            onPlayTracks(tracks, 0)
+                        }
+                        tracks.forEachIndexed { i, t ->
+                            TrackRow(t, yun, false) { onPlayTracks(tracks, i) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GroupHeader(title: String, count: Int, yun: YunColors, onPlay: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, color = yun.ink, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("$count 首", color = yun.muted, fontSize = 11.sp)
+        }
+        TextButton(onClick = onPlay) {
+            Text("播放", color = yun.greenDeep)
+        }
+    }
+}
+
+@Composable
+private fun AddTracksSheet(
+    allTracks: List<Track>,
+    yun: YunColors,
+    onConfirm: (List<String>) -> Unit,
+    onCancel: () -> Unit,
+) {
+    var selected by remember { mutableStateOf(setOf<String>()) }
+    var filter by remember { mutableStateOf("") }
+    val filtered = remember(allTracks, filter) {
+        val q = filter.trim()
+        if (q.isEmpty()) allTracks
+        else allTracks.filter {
+            it.title.contains(q, true) ||
+                it.artist.contains(q, true) ||
+                it.album.contains(q, true)
+        }
+    }
+    Column(Modifier.padding(horizontal = 16.dp)) {
+        Text("添加歌曲到歌单", color = yun.ink, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
+        Text("已选 ${selected.size} 首 · 曲库 ${allTracks.size}", color = yun.muted, fontSize = 12.sp)
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = filter,
+            onValueChange = { filter = it },
+            placeholder = { Text("搜索标题 / 艺人 / 专辑") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = {
+                selected = if (selected.size == filtered.size) emptySet()
+                else filtered.map { it.id }.toSet()
+            }) {
+                Text(if (selected.size == filtered.size && filtered.isNotEmpty()) "取消全选" else "全选当前")
+            }
+            Button(
+                onClick = { onConfirm(selected.toList()) },
+                colors = ButtonDefaults.buttonColors(yun.green),
+                enabled = selected.isNotEmpty(),
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("添加 ${selected.size} 首")
+            }
+            TextButton(onClick = onCancel) { Text("取消") }
+        }
+        Spacer(Modifier.height(8.dp))
+        LazyColumn(Modifier.height(420.dp)) {
+            items(filtered, key = { it.id }) { t ->
+                val on = t.id in selected
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            selected = if (on) selected - t.id else selected + t.id
+                        }
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        Modifier
+                            .size(22.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (on) yun.green else yun.line),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (on) Text("✓", color = Color.White, fontSize = 12.sp)
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    CoverThumb(t.coverUri, yun)
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(t.title, color = yun.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            "${t.artist} · ${if (t.source == TrackSource.LOCAL) "本地" else "WebDAV"}",
+                            color = yun.muted,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                        )
+                    }
                 }
             }
         }

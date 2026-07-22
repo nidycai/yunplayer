@@ -142,9 +142,15 @@ class YunViewModel(app: Application) : AndroidViewModel(app) {
                     }
 
                     val queue = _player.value.queue.ifEmpty { playback.lastQueueSnapshot() }
-                    val track = allTracks.value.find { it.id == snap.id }
+                    val trackFromLib = allTracks.value.find { it.id == snap.id }
+                    val track = trackFromLib
                         ?: queue.getOrNull(snap.idx)
                         ?: _player.value.track
+
+                    // 切歌时补封面/歌词
+                    if (track != null && track.id != lastEnrichedId) {
+                        enrichAndShow(track)
+                    }
 
                     val liked = if (track == null) {
                         false
@@ -161,11 +167,12 @@ class YunViewModel(app: Application) : AndroidViewModel(app) {
                         v
                     }
 
+                    val holdSeek = System.currentTimeMillis() < seekHoldUntil
                     _player.update {
                         it.copy(
                             track = track,
                             playing = snap.playing && !snap.hasError,
-                            positionMs = snap.pos,
+                            positionMs = if (holdSeek) it.positionMs else snap.pos,
                             durationMs = if (snap.dur > 0) snap.dur else (track?.durationMs ?: 0),
                             liked = liked,
                             queueIndex = snap.idx,
@@ -202,8 +209,17 @@ class YunViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         val safeIndex = index.coerceIn(0, tracks.lastIndex)
-        _player.update { it.copy(queue = tracks, queueIndex = safeIndex) }
+        _player.update {
+            it.copy(
+                queue = tracks,
+                queueIndex = safeIndex,
+                track = tracks.getOrNull(safeIndex),
+                positionMs = 0L,
+            )
+        }
         playback.setQueue(tracks, safeIndex, true)
+        // 异步补封面/歌词，不阻塞开播
+        tracks.getOrNull(safeIndex)?.let { enrichAndShow(it) }
     }
 
     fun playTrack(track: Track, queue: List<Track> = listOf(track)) {
@@ -214,7 +230,41 @@ class YunViewModel(app: Application) : AndroidViewModel(app) {
     fun togglePlay() = playback.toggle()
     fun next() = playback.next()
     fun prev() = playback.prev()
-    fun seek(ms: Long) = playback.seek(ms)
+
+    fun seek(ms: Long) {
+        if (ms < 0) return
+        // 乐观更新 UI，避免拖完进度条又跳回旧位置
+        _player.update { it.copy(positionMs = ms) }
+        seekHoldUntil = System.currentTimeMillis() + 800
+        playback.seek(ms)
+    }
+
+    /** 拖动后短暂忽略 player 回报的旧 position */
+    private var seekHoldUntil: Long = 0L
+    private var lastEnrichedId: String? = null
+
+    private fun enrichAndShow(track: Track) {
+        // 同曲只拉一次，避免轮询刷屏
+        if (lastEnrichedId == track.id) return
+        lastEnrichedId = track.id
+        viewModelScope.launch {
+            try {
+                val enriched = withContext(Dispatchers.IO) { repo.enrichTrackMeta(track) }
+                _player.update { st ->
+                    if (st.track?.id != enriched.id && st.queue.none { it.id == enriched.id }) {
+                        return@update st
+                    }
+                    val q = st.queue.map { if (it.id == enriched.id) enriched else it }
+                    st.copy(
+                        track = if (st.track?.id == enriched.id) enriched else st.track,
+                        queue = q,
+                    )
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("YunVM", "enrich", e)
+            }
+        }
+    }
 
     fun cyclePlayMode() {
         val order = listOf(PlayMode.ORDER, PlayMode.LOOP, PlayMode.SHUFFLE, PlayMode.ONE)
@@ -328,10 +378,41 @@ class YunViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 val id = repo.createPlaylist(name)
-                toast("已创建歌单")
+                toast("已创建歌单，请添加歌曲")
                 openPlaylist(id)
+                // 打开「添加歌曲」面板
+                _addingToPlaylistId.value = id
             } catch (e: Exception) {
                 toast(e.message ?: "创建失败")
+            }
+        }
+    }
+
+    private val _addingToPlaylistId = MutableStateFlow<String?>(null)
+    val addingToPlaylistId: StateFlow<String?> = _addingToPlaylistId.asStateFlow()
+
+    fun openAddTracks(playlistId: String) {
+        _addingToPlaylistId.value = playlistId
+    }
+
+    fun closeAddTracks() {
+        _addingToPlaylistId.value = null
+    }
+
+    fun addTracksToCurrentPlaylist(trackIds: List<String>) {
+        val plId = _addingToPlaylistId.value ?: _detailPlaylistId.value ?: return
+        if (trackIds.isEmpty()) {
+            toast("请选择歌曲")
+            return
+        }
+        viewModelScope.launch {
+            try {
+                repo.addTracksToPlaylist(plId, trackIds)
+                toast("已添加 ${trackIds.size} 首")
+                openPlaylist(plId)
+                closeAddTracks()
+            } catch (e: Exception) {
+                toast(e.message ?: "添加失败")
             }
         }
     }

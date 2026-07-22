@@ -1,8 +1,7 @@
 package com.yunplayer.app.ui.player
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -21,18 +20,20 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.QueueMusic
 import androidx.compose.material3.Icon
@@ -47,12 +48,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -85,6 +88,18 @@ fun PlayerScreen(
         (player.positionMs.toFloat() / player.durationMs).coerceIn(0f, 1f)
     } else 0f
 
+    // 封面/歌词用 alpha 交叉，避免 AnimatedVisibility 切换时圆角变灰方
+    val coverAlpha by animateFloatAsState(
+        targetValue = if (showLyrics) 0f else 1f,
+        animationSpec = tween(280),
+        label = "coverA",
+    )
+    val lyricsAlpha by animateFloatAsState(
+        targetValue = if (showLyrics) 1f else 0f,
+        animationSpec = tween(280),
+        label = "lyricsA",
+    )
+
     Column(
         Modifier
             .fillMaxSize()
@@ -92,7 +107,6 @@ fun PlayerScreen(
             .padding(horizontal = 22.dp)
             .padding(bottom = 16.dp),
     ) {
-        // Top bar
         Row(
             Modifier.fillMaxWidth().padding(top = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -109,30 +123,32 @@ fun PlayerScreen(
 
         Spacer(Modifier.weight(0.08f))
 
-        // Cover + FX
+        // Cover + FX + Lyrics（同一容器，不卸载封面，避免灰角闪烁）
         Box(
             Modifier
                 .fillMaxWidth()
                 .weight(1f),
             contentAlignment = Alignment.Center,
         ) {
-            // 使用顶层 AnimatedVisibility（非 ColumnScope 扩展）
-            androidx.compose.animation.AnimatedVisibility(
-                visible = !showLyrics,
-                enter = fadeIn(),
-                exit = fadeOut(),
+            val coverShape = RoundedCornerShape(36.dp)
+            Box(
+                Modifier
+                    .fillMaxWidth(0.88f)
+                    .aspectRatio(1f)
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() },
+                    ) { showLyrics = !showLyrics },
             ) {
+                // 动效在封面下方，从 scale=1 向外扩，贴合边缘
                 Box(
                     Modifier
-                        .fillMaxWidth(0.88f)
-                        .aspectRatio(1f)
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() },
-                        ) { showLyrics = true },
+                        .fillMaxSize()
+                        .alpha(coverAlpha),
+                    contentAlignment = Alignment.Center,
                 ) {
                     CoverFxOverlay(
-                        playing = player.playing,
+                        playing = player.playing && !showLyrics,
                         fx = prefs.playFx,
                         greenDeep = yun.greenDeep,
                         modifier = Modifier.fillMaxSize(),
@@ -140,15 +156,15 @@ fun PlayerScreen(
                     Box(
                         Modifier
                             .fillMaxSize()
-                            .shadow(28.dp, RoundedCornerShape(36.dp), ambientColor = yun.green.copy(0.25f))
-                            .clip(RoundedCornerShape(36.dp))
+                            .shadow(20.dp, coverShape, ambientColor = yun.green.copy(0.22f), spotColor = yun.green.copy(0.18f))
+                            .clip(coverShape)
                             .background(yun.greenPale),
                     ) {
-                        if (track?.coverUri != null) {
+                        if (!track?.coverUri.isNullOrBlank()) {
                             AsyncImage(
-                                model = track.coverUri,
+                                model = track!!.coverUri,
                                 contentDescription = null,
-                                modifier = Modifier.fillMaxSize(),
+                                modifier = Modifier.fillMaxSize().clip(coverShape),
                                 contentScale = ContentScale.Crop,
                             )
                         } else {
@@ -165,7 +181,6 @@ fun PlayerScreen(
                                 Text("♪", fontSize = 64.sp, color = yun.greenDeep.copy(0.5f))
                             }
                         }
-                        // source badge
                         val src = track?.source
                         if (src != null) {
                             Text(
@@ -185,36 +200,38 @@ fun PlayerScreen(
                         }
                     }
                 }
-            }
-            androidx.compose.animation.AnimatedVisibility(
-                visible = showLyrics,
-                enter = fadeIn(),
-                exit = fadeOut(),
-            ) {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() },
-                        ) { showLyrics = false },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = track?.lyrics?.ifBlank { null }
-                            ?: "暂无歌词\n（本地文件可后续扩展内嵌歌词）",
-                        color = yun.muted,
-                        fontSize = 15.sp,
-                        lineHeight = 26.sp,
-                        modifier = Modifier.padding(24.dp),
-                    )
+
+                // 歌词层叠在封面之上（半透明卡片，同样圆角）
+                if (lyricsAlpha > 0.01f) {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .alpha(lyricsAlpha)
+                            .clip(coverShape)
+                            .background(yun.card.copy(alpha = 0.94f))
+                            .padding(20.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        val raw = track?.lyrics?.ifBlank { null }
+                        val body = raw?.let { stripLrcTimestamps(it) }
+                            ?: "暂无歌词\n\n本地：需文件内嵌封面/歌词\nWebDAV：同目录 cover.jpg / 同名.lrc\n\n轻触返回封面"
+                        Text(
+                            text = body,
+                            color = yun.inkSoft,
+                            fontSize = 15.sp,
+                            lineHeight = 26.sp,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState()),
+                        )
+                    }
                 }
             }
         }
 
         Spacer(Modifier.height(12.dp))
 
-        // Meta
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(
@@ -262,14 +279,16 @@ fun PlayerScreen(
 
         Spacer(Modifier.height(10.dp))
 
-        // Progress — Slider 要求 value ∈ [0,1]；非法值会直接崩
+        // 进度：拖动时用本地 scrub，松手再 seek；播放中轮询不会顶掉拖动值
         var scrub by remember { mutableStateOf<Float?>(null) }
         val shown = (scrub ?: progress).let { v ->
             if (v.isFinite()) v.coerceIn(0f, 1f) else 0f
         }
         Slider(
             value = shown,
-            onValueChange = { v -> scrub = if (v.isFinite()) v.coerceIn(0f, 1f) else 0f },
+            onValueChange = { v ->
+                scrub = if (v.isFinite()) v.coerceIn(0f, 1f) else 0f
+            },
             onValueChangeFinished = {
                 val d = player.durationMs
                 val s = scrub
@@ -278,6 +297,7 @@ fun PlayerScreen(
                 }
                 scrub = null
             },
+            enabled = player.durationMs > 0 || track != null,
             colors = SliderDefaults.colors(
                 thumbColor = yun.green,
                 activeTrackColor = yun.green,
@@ -286,13 +306,15 @@ fun PlayerScreen(
             modifier = Modifier.fillMaxWidth(),
         )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(fmtMs(player.positionMs), color = yun.muted, fontSize = 11.sp)
+            val posShow = if (scrub != null && player.durationMs > 0) {
+                (scrub!! * player.durationMs).toLong()
+            } else player.positionMs
+            Text(fmtMs(posShow), color = yun.muted, fontSize = 11.sp)
             Text(fmtMs(player.durationMs), color = yun.muted, fontSize = 11.sp)
         }
 
         Spacer(Modifier.height(8.dp))
 
-        // Transport
         Row(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -346,4 +368,17 @@ private fun fmtMs(ms: Long): String {
     val m = total / 60
     val s = total % 60
     return "%02d:%02d".format(m, s)
+}
+
+/** 去掉 [mm:ss.xx] 时间戳，方便纯文本展示 */
+private fun stripLrcTimestamps(raw: String): String {
+    return raw.lineSequence()
+        .map { line ->
+            line.replace(Regex("""\[\d{1,2}:\d{2}([.:]\d{1,3})?]"""), "")
+                .replace(Regex("""\[[a-zA-Z]+:[^\]]*|]"""), "")
+                .trim()
+        }
+        .filter { it.isNotBlank() }
+        .joinToString("\n")
+        .ifBlank { raw }
 }

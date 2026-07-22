@@ -1,6 +1,7 @@
 package com.yunplayer.app.data.repository
 
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -24,6 +25,11 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import okhttp3.Credentials
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import java.io.File
+import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -99,6 +105,9 @@ class MusicRepository(
         var artist = "本地文件"
         var album = ""
         var duration = 0L
+        var coverUri: String? = null
+        var lyrics: String? = null
+        val id = "local_" + sha1(uri.toString()).take(16)
         val retriever = MediaMetadataRetriever()
         try {
             retriever.setDataSource(context, uri)
@@ -108,6 +117,8 @@ class MusicRepository(
                 ?: "本地文件"
             album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM).orEmpty()
             duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            // 内嵌封面 → 写到 app filesDir/covers/
+            coverUri = extractEmbeddedCover(retriever, id)
         } catch (_: Exception) {
         } finally {
             try {
@@ -115,7 +126,8 @@ class MusicRepository(
             } catch (_: Exception) {
             }
         }
-        val id = "local_" + sha1(uri.toString()).take(16)
+        // 旁路歌词：同名 .lrc（content URI 不一定可读到同目录，仅尝试 open）
+        lyrics = tryReadSidecarLrc(uri, name)
         return Track(
             id = id,
             title = title,
@@ -125,7 +137,210 @@ class MusicRepository(
             source = TrackSource.LOCAL,
             uri = uri.toString(),
             fileName = name,
+            coverUri = coverUri,
+            lyrics = lyrics,
         )
+    }
+
+    /** 从 MediaMetadataRetriever 抽出内嵌专辑图，返回 file:// URI */
+    private fun extractEmbeddedCover(retriever: MediaMetadataRetriever, trackId: String): String? {
+        return try {
+            val bytes = retriever.embeddedPicture ?: return null
+            // 验证是合法图片
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+            val dir = File(context.filesDir, "covers").apply { mkdirs() }
+            val out = File(dir, "$trackId.jpg")
+            FileOutputStream(out).use { it.write(bytes) }
+            Uri.fromFile(out).toString()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun tryReadSidecarLrc(audioUri: Uri, displayName: String): String? {
+        // SAF content:// 通常没有同目录权限；仅当能猜到 .lrc 时再扩展
+        return null
+    }
+
+    /**
+     * 播放时补全元数据：封面 / 歌词 / 艺人专辑。
+     * 本地用 content URI；WebDAV 拉文件头几百 KB 试着读 embedded picture（小文件）或旁路 cover.jpg / .lrc。
+     */
+    suspend fun enrichTrackMeta(track: Track): Track = withContext(Dispatchers.IO) {
+        if (!track.coverUri.isNullOrBlank() && !track.lyrics.isNullOrBlank()) return@withContext track
+        try {
+            when (track.source) {
+                TrackSource.LOCAL -> {
+                    val uri = Uri.parse(track.uri)
+                    val retriever = MediaMetadataRetriever()
+                    var cover = track.coverUri
+                    var lyrics = track.lyrics
+                    var artist = track.artist
+                    var album = track.album
+                    var title = track.title
+                    try {
+                        retriever.setDataSource(context, uri)
+                        if (cover.isNullOrBlank()) cover = extractEmbeddedCover(retriever, track.id)
+                        if (artist == "本地文件" || artist.isBlank()) {
+                            artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+                                ?.ifBlank { null } ?: artist
+                        }
+                        if (album.isBlank()) {
+                            album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM).orEmpty()
+                        }
+                        val t = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
+                        if (!t.isNullOrBlank()) title = t
+                    } catch (_: Exception) {
+                    } finally {
+                        try {
+                            retriever.release()
+                        } catch (_: Exception) {
+                        }
+                    }
+                    val updated = track.copy(
+                        coverUri = cover,
+                        lyrics = lyrics,
+                        artist = artist,
+                        album = album,
+                        title = title,
+                    )
+                    if (updated != track) {
+                        upsertPreservingStats(updated)
+                    }
+                    updated
+                }
+                TrackSource.WEBDAV -> enrichWebDavMeta(track)
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("MusicRepo", "enrichTrackMeta ${track.id}", e)
+            track
+        }
+    }
+
+    private suspend fun upsertPreservingStats(track: Track) {
+        val old = db.tracks().getById(track.id)
+        db.tracks().upsert(
+            track.toEntity().copy(
+                dateAdded = old?.dateAdded ?: System.currentTimeMillis(),
+                playCount = old?.playCount ?: track.playCount,
+                lastPlayed = old?.lastPlayed ?: 0L,
+            ),
+        )
+    }
+
+    private suspend fun enrichWebDavMeta(track: Track): Track {
+        val cfg = prefs.prefs.first().webdav
+        if (cfg.baseUrl.isBlank()) return track
+        val scoped = webDav.withConfig(cfg)
+        var cover = track.coverUri
+        var lyrics = track.lyrics
+        var artist = track.artist
+        var album = track.album
+
+        // 1) 同目录 cover.jpg / folder.jpg / 同名 .jpg
+        if (cover.isNullOrBlank()) {
+            val href = track.webdavHref ?: return track
+            val dir = href.substringBeforeLast('/', "")
+            val baseName = href.substringAfterLast('/').substringBeforeLast('.')
+            val candidates = listOf(
+                "$dir/cover.jpg", "$dir/cover.png", "$dir/folder.jpg", "$dir/Folder.jpg",
+                "$dir/$baseName.jpg", "$dir/$baseName.png",
+            )
+            for (c in candidates) {
+                val url = scoped.mediaUrl(c)
+                val local = downloadCoverToFile(url, cfg, track.id)
+                if (local != null) {
+                    cover = local
+                    break
+                }
+            }
+        }
+
+        // 2) 同名 .lrc
+        if (lyrics.isNullOrBlank()) {
+            val href = track.webdavHref
+            if (href != null) {
+                val lrcHref = href.substringBeforeLast('.') + ".lrc"
+                val lrcUrl = scoped.mediaUrl(lrcHref)
+                lyrics = downloadText(lrcUrl, cfg)
+            }
+        }
+
+        // 3) 艺人默认仍是 WebDAV 时，用父文件夹名当专辑（扫描时已写），艺人用上一级目录
+        if (artist == "WebDAV" || artist.isBlank()) {
+            val href = track.webdavHref.orEmpty()
+            val parts = href.trim('/').split('/').filter { it.isNotBlank() }
+            if (parts.size >= 2) {
+                artist = parts[parts.size - 2]
+            }
+            if (album.isBlank() && parts.size >= 3) {
+                album = parts[parts.size - 2]
+                artist = parts[parts.size - 3]
+            }
+        }
+
+        val updated = track.copy(
+            coverUri = cover,
+            lyrics = lyrics,
+            artist = artist.ifBlank { track.artist },
+            album = album.ifBlank { track.album },
+        )
+        if (updated != track) {
+            upsertPreservingStats(updated)
+        }
+        return updated
+    }
+
+    /** 下载封面到本地 filesDir，避免 Coil 无法带 WebDAV 鉴权 */
+    private fun downloadCoverToFile(url: String, cfg: WebDavConfig, trackId: String): String? {
+        return try {
+            val client = OkHttpClient.Builder().followRedirects(true).build()
+            val req = Request.Builder().url(url).get()
+                .apply {
+                    if (cfg.username.isNotBlank() || cfg.password.isNotBlank()) {
+                        header("Authorization", Credentials.basic(cfg.username, cfg.password))
+                    }
+                }
+                .build()
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return null
+                val bytes = resp.body?.bytes() ?: return null
+                if (bytes.size < 100 || bytes.size > 8_000_000) return null
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+                val dir = File(context.filesDir, "covers").apply { mkdirs() }
+                val out = File(dir, "$trackId.jpg")
+                FileOutputStream(out).use { it.write(bytes) }
+                Uri.fromFile(out).toString()
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun downloadText(url: String, cfg: WebDavConfig): String? {
+        return try {
+            val client = OkHttpClient.Builder().followRedirects(true).build()
+            val req = Request.Builder().url(url).get()
+                .apply {
+                    if (cfg.username.isNotBlank() || cfg.password.isNotBlank()) {
+                        header("Authorization", Credentials.basic(cfg.username, cfg.password))
+                    }
+                }
+                .build()
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return null
+                val body = resp.body?.string().orEmpty()
+                body.takeIf { it.isNotBlank() && it.length < 500_000 }
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    suspend fun addTracksToPlaylist(playlistId: String, trackIds: List<String>) {
+        trackIds.forEach { tid ->
+            db.playlists().addTrack(PlaylistTrackCrossRef(playlistId, tid, 0))
+        }
     }
 
     private fun queryDisplayName(uri: Uri): String? {
