@@ -262,15 +262,20 @@ fun PlayerScreen(
 
         Spacer(Modifier.height(10.dp))
 
-        // Progress
+        // Progress — Slider 要求 value ∈ [0,1]；非法值会直接崩
         var scrub by remember { mutableStateOf<Float?>(null) }
-        val shown = scrub ?: progress
+        val shown = (scrub ?: progress).let { v ->
+            if (v.isFinite()) v.coerceIn(0f, 1f) else 0f
+        }
         Slider(
             value = shown,
-            onValueChange = { scrub = it },
+            onValueChange = { v -> scrub = if (v.isFinite()) v.coerceIn(0f, 1f) else 0f },
             onValueChangeFinished = {
                 val d = player.durationMs
-                if (d > 0 && scrub != null) onSeek((scrub!! * d).toLong())
+                val s = scrub
+                if (d > 0 && s != null && s.isFinite()) {
+                    onSeek((s.coerceIn(0f, 1f) * d).toLong())
+                }
                 scrub = null
             },
             colors = SliderDefaults.colors(

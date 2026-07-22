@@ -39,8 +39,15 @@ class WebDavClient(
             var p = path.ifBlank { "/" }
             if (!p.startsWith("/")) p = "/$p"
             val enc = p.split("/").joinToString("/") { seg ->
-                if (seg.isEmpty()) ""
-                else URLEncoder.encode(URLDecoder.decode(seg, "UTF-8"), "UTF-8").replace("+", "%20")
+                if (seg.isEmpty()) {
+                    ""
+                } else {
+                    try {
+                        URLEncoder.encode(URLDecoder.decode(seg, "UTF-8"), "UTF-8").replace("+", "%20")
+                    } catch (_: Exception) {
+                        URLEncoder.encode(seg, "UTF-8").replace("+", "%20")
+                    }
+                }
             }
             return base + enc
         }

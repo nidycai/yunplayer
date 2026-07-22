@@ -48,10 +48,10 @@ class MainActivity : ComponentActivity() {
             val prefs by vm.prefs.collectAsState()
             val yun = colorsFor(prefs.theme)
             YunPlayerTheme(themeId = prefs.theme) {
-                // positional use only; no named "modifier =" argument
+                // positional Modifier only; avoid named "modifier =" (CI/compiler quirk)
                 val full = Modifier.fillMaxSize()
                 Box(full) {
-                    Surface(color = yun.bgBot) {
+                    Surface(full, color = yun.bgBot) {
                         YunAppRoot(
                             vm = vm,
                             onPickLocalAudio = {

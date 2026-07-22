@@ -30,6 +30,12 @@ class YunApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        // 未捕获异常写日志，便于定位闪退（不吞异常，继续抛出）
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            android.util.Log.e("YunCrash", "Uncaught on ${t.name}", e)
+            prev?.uncaughtException(t, e)
+        }
         repo = MusicRepository(this, webDav = WebDavClient(httpClient))
         playback = PlaybackController(this)
         createChannels()

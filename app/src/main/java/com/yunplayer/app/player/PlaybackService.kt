@@ -26,10 +26,16 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * 原生播放服务（Media3）—— 无 WebView / 无 CORS。
  * WebDAV 通过 OkHttp DataSource + AuthInterceptor 拉流。
+ *
+ * 注意：不要用 startForegroundService 冷启动本服务。
+ * MediaSessionService 只在真正播放并弹出媒体通知时才进入前台；
+ * 提前 FGS 会在 5s 内未 startForeground 时直接闪退。
  */
 class PlaybackService : MediaSessionService() {
     private var player: ExoPlayer? = null
@@ -37,43 +43,65 @@ class PlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
-        val app = application as YunApp
-        val okFactory = OkHttpDataSource.Factory(app.httpClient)
-        val dsFactory = DefaultDataSource.Factory(this, okFactory)
-        val mediaSourceFactory = DefaultMediaSourceFactory(dsFactory)
+        try {
+            val app = application as YunApp
+            val okFactory = OkHttpDataSource.Factory(app.httpClient)
+            val dsFactory = DefaultDataSource.Factory(this, okFactory)
+            val mediaSourceFactory = DefaultMediaSourceFactory(dsFactory)
 
-        player = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(mediaSourceFactory)
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(C.USAGE_MEDIA)
-                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-                    .build(),
-                true,
+            val exo = ExoPlayer.Builder(this)
+                .setMediaSourceFactory(mediaSourceFactory)
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(C.USAGE_MEDIA)
+                        .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                        .build(),
+                    true,
+                )
+                .setHandleAudioBecomingNoisy(true)
+                .build()
+
+            val sessionActivity = PendingIntent.getActivity(
+                this,
+                0,
+                Intent(this, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                },
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
-            .setHandleAudioBecomingNoisy(true)
-            .build()
+            session = MediaSession.Builder(this, exo)
+                .setSessionActivity(sessionActivity)
+                .build()
 
-        val sessionActivity = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        session = MediaSession.Builder(this, player!!)
-            .setSessionActivity(sessionActivity)
-            .build()
-
-        PlayerHolder.bind(this, player!!)
+            player = exo
+            PlayerHolder.bind(this, exo)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "PlaybackService onCreate failed", e)
+            stopSelf()
+        }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        val p = player
+        if (p == null || !p.playWhenReady || p.mediaItemCount == 0 || p.playbackState == Player.STATE_ENDED) {
+            p?.stop()
+            stopSelf()
+        }
+    }
+
     override fun onDestroy() {
         PlayerHolder.unbind()
-        session?.run {
-            player.release()
-            release()
+        try {
+            session?.release()
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "session release", e)
+        }
+        try {
+            player?.release()
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "player release", e)
         }
         session = null
         player = null
@@ -81,6 +109,8 @@ class PlaybackService : MediaSessionService() {
     }
 
     companion object {
+        private const val TAG = "PlaybackService"
+
         fun applyPlayMode(player: Player, mode: PlayMode) {
             when (mode) {
                 PlayMode.ORDER -> {
@@ -108,7 +138,9 @@ class PlaybackService : MediaSessionService() {
                 .setArtist(track.artist)
                 .setAlbumTitle(track.album)
                 .apply {
-                    track.coverUri?.let { setArtworkUri(android.net.Uri.parse(it)) }
+                    track.coverUri?.takeIf { it.isNotBlank() }?.let {
+                        runCatching { setArtworkUri(android.net.Uri.parse(it)) }
+                    }
                 }
                 .build()
             return MediaItem.Builder()
@@ -135,39 +167,64 @@ object PlayerHolder {
         service = null
         player = null
     }
+
+    /** 安全读取：player 已释放或异常时返回 null，避免闪退 */
+    inline fun <T> withPlayer(block: (ExoPlayer) -> T): T? {
+        val p = player ?: return null
+        return try {
+            block(p)
+        } catch (e: Exception) {
+            android.util.Log.w("PlayerHolder", "player access failed", e)
+            null
+        }
+    }
 }
 
 class PlaybackController(private val app: YunApp) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val queueMutex = Mutex()
 
     fun ensureService() {
         val intent = Intent(app, PlaybackService::class.java)
+        // 禁止 startForegroundService：MediaSessionService 在未真正播放时不会立刻
+        // startForeground，会触发 ForegroundServiceDidNotStartInTimeException 闪退。
+        // 由 Media3 在播放时自行升为前台并弹出媒体通知。
         try {
-            app.startForegroundService(intent)
-        } catch (_: Exception) {
             app.startService(intent)
+        } catch (e: Exception) {
+            android.util.Log.e("PlaybackController", "ensureService failed: ${e.message}", e)
         }
     }
 
     fun player(): ExoPlayer? = PlayerHolder.player
 
     fun setQueue(tracks: List<Track>, startIndex: Int = 0, autoPlay: Boolean = true) {
+        if (tracks.isEmpty()) return
         ensureService()
         scope.launch {
-            val prefs = app.repo.userPrefs.first()
-            AuthInterceptor.header =
-                if (tracks.any { it.source == TrackSource.WEBDAV }) {
-                    app.repo.webDavAuthHeader(prefs.webdav)
-                } else null
+            queueMutex.withLock {
+                try {
+                    val prefs = app.repo.userPrefs.first()
+                    AuthInterceptor.header =
+                        if (tracks.any { it.source == TrackSource.WEBDAV }) {
+                            app.repo.webDavAuthHeader(prefs.webdav)
+                        } else {
+                            null
+                        }
 
-            val pl = waitPlayer() ?: return@launch
-            val items = tracks.map { PlaybackService.toMediaItem(it) }
-            val idx = startIndex.coerceIn(0, (items.size - 1).coerceAtLeast(0))
-            pl.setMediaItems(items, idx, 0L)
-            PlaybackService.applyPlayMode(pl, prefs.playMode)
-            pl.prepare()
-            if (autoPlay) pl.play()
-            tracks.getOrNull(idx)?.let { app.repo.bumpPlay(it.id) }
+                    val pl = waitPlayer() ?: return@withLock
+                    val items = tracks.map { PlaybackService.toMediaItem(it) }
+                    if (items.isEmpty()) return@withLock
+                    val idx = startIndex.coerceIn(0, items.lastIndex)
+                    pl.setMediaItems(items, idx, 0L)
+                    PlaybackService.applyPlayMode(pl, prefs.playMode)
+                    pl.prepare()
+                    if (autoPlay) pl.play()
+                    tracks.getOrNull(idx)?.let { app.repo.bumpPlay(it.id) }
+                } catch (e: Exception) {
+                    android.util.Log.e("PlaybackController", "setQueue failed", e)
+                }
+            }
         }
     }
 
@@ -178,35 +235,42 @@ class PlaybackController(private val app: YunApp) {
     }
 
     fun toggle() {
-        val p = player() ?: return
-        if (p.isPlaying) p.pause() else p.play()
+        PlayerHolder.withPlayer { p ->
+            if (p.isPlaying) p.pause() else p.play()
+        }
     }
 
     fun next() {
-        player()?.seekToNextMediaItem()
+        PlayerHolder.withPlayer { it.seekToNextMediaItem() }
     }
 
     fun prev() {
-        val p = player() ?: return
-        if (p.currentPosition > 3000) p.seekTo(0) else p.seekToPreviousMediaItem()
+        PlayerHolder.withPlayer { p ->
+            if (p.currentPosition > 3000) p.seekTo(0) else p.seekToPreviousMediaItem()
+        }
     }
 
     fun seek(ms: Long) {
-        player()?.seekTo(ms)
+        if (ms < 0) return
+        PlayerHolder.withPlayer { it.seekTo(ms) }
     }
 
     fun setPlayMode(mode: PlayMode) {
         scope.launch {
-            app.repo.setPlayMode(mode)
-            player()?.let { PlaybackService.applyPlayMode(it, mode) }
+            try {
+                app.repo.setPlayMode(mode)
+                PlayerHolder.withPlayer { PlaybackService.applyPlayMode(it, mode) }
+            } catch (e: Exception) {
+                android.util.Log.e("PlaybackController", "setPlayMode", e)
+            }
         }
     }
 
     private suspend fun waitPlayer(): ExoPlayer? {
-        if (PlayerHolder.player != null) return PlayerHolder.player
+        PlayerHolder.player?.let { return it }
         ensureService()
-        repeat(40) {
-            delay(50)
+        repeat(50) {
+            delay(40)
             PlayerHolder.player?.let { return it }
         }
         return PlayerHolder.player

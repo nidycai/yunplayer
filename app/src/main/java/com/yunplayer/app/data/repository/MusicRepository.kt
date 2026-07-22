@@ -99,17 +99,21 @@ class MusicRepository(
         var artist = "本地文件"
         var album = ""
         var duration = 0L
+        val retriever = MediaMetadataRetriever()
         try {
-            MediaMetadataRetriever().use { r ->
-                r.setDataSource(context, uri)
-                title = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)?.ifBlank { null }
-                    ?: titleFallback
-                artist = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)?.ifBlank { null }
-                    ?: "本地文件"
-                album = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM).orEmpty()
-                duration = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
-            }
+            retriever.setDataSource(context, uri)
+            title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)?.ifBlank { null }
+                ?: titleFallback
+            artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)?.ifBlank { null }
+                ?: "本地文件"
+            album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM).orEmpty()
+            duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
         } catch (_: Exception) {
+        } finally {
+            try {
+                retriever.release()
+            } catch (_: Exception) {
+            }
         }
         val id = "local_" + sha1(uri.toString()).take(16)
         return Track(
@@ -205,7 +209,10 @@ class MusicRepository(
         }
         val ids = db.playlists().getTrackIds(playlistId)
         if (ids.isEmpty()) return emptyList()
-        val map = db.tracks().getByIds(ids).associateBy { it.id }
+        // Room IN () 空列表在部分版本会崩；上面已挡。大批次分片更稳
+        val map = ids.chunked(400)
+            .flatMap { chunk -> db.tracks().getByIds(chunk) }
+            .associateBy { it.id }
         return ids.mapNotNull { map[it]?.toTrack() }
     }
 
@@ -218,8 +225,10 @@ class MusicRepository(
 
     suspend fun testWebDav(config: WebDavConfig): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            webDav.withConfig(config).testConnection()
-            Result.success(Unit)
+            // WebDavClient.Result：ok=false 时不会抛异常，必须检查字段
+            val r = webDav.withConfig(config).testConnection()
+            if (r.ok) Result.success(Unit)
+            else Result.failure(IllegalStateException(r.error ?: "连接失败"))
         } catch (e: Exception) {
             Result.failure(e)
         }
